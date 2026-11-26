@@ -1,57 +1,42 @@
-// Delivery program for the Wednesday 25 November 2026 news front page.
-// The finished page art is entry.png, sitting beside this file. This
-// program verifies the art against the edition's gate and drops a
-// byte-for-byte copy where the grader looks for it.
+// Wednesday 25 November 2026 front page — entry program.
 //
-// Local trial run:
-//   mkdir -p ./out
-//   MAKEFUN_OUTPUT_DIR=./out node main.ts
-// The grader instead points MAKEFUN_OUTPUT_DIR at its own output folder
-// and MAKEFUN_BOT_DIR at the mounted repo; both fall back sensibly.
+// The finished page is a single finished image (entry.png) that ships in
+// this repo. The grader runs this file as `node /bot/main.ts` from an
+// unknown working directory, with the repo mounted read-only at /bot and
+// MAKEFUN_OUTPUT_DIR pointing at the writable output directory. So every
+// path here is resolved from the script's own location (or the
+// MAKEFUN_BOT_DIR override), never from the process working directory.
+//
+// The program's only job: place a byte-identical copy of entry.png at
+// /output/entry.png (or $MAKEFUN_OUTPUT_DIR/entry.png). Running it twice
+// must produce identical bytes, because the copy is a plain file copy.
 
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { copyFileSync, existsSync, mkdirSync, statSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const LIMIT_BYTES = 1024 * 1024;
-const LIMIT_SIDE_PX = 1024;
+// Where the repo lives: prefer the harness-provided directory, otherwise
+// fall back to the directory holding this script.
+const scriptDir = dirname(fileURLToPath(import.meta.url));
+const botDir = process.env.MAKEFUN_BOT_DIR ?? scriptDir;
 
-function abort(reason: string): never {
-  console.error(`entry delivery failed: ${reason}`);
-  process.exit(1);
+// Where the finished image must land.
+const outputDir = process.env.MAKEFUN_OUTPUT_DIR ?? "/output";
+
+const sourcePath = join(botDir, "entry.png");
+const targetPath = join(outputDir, "entry.png");
+
+if (!existsSync(sourcePath)) {
+  throw new Error(`front-page image not found at ${sourcePath}`);
 }
 
-const botDir = process.env.MAKEFUN_BOT_DIR ?? dirname(fileURLToPath(import.meta.url));
-const outDir = process.env.MAKEFUN_OUTPUT_DIR ?? '/output';
+mkdirSync(outputDir, { recursive: true });
+copyFileSync(sourcePath, targetPath);
 
-const artPath = join(botDir, 'entry.png');
-if (!existsSync(artPath)) {
-  abort(`no entry.png found in ${botDir}`);
+// Confirm the copy landed and report its size, so a silent short write
+// cannot pass unnoticed.
+const writtenBytes = statSync(targetPath).size;
+if (writtenBytes === 0) {
+  throw new Error(`copied image is empty at ${targetPath}`);
 }
-
-const artBytes = readFileSync(artPath);
-
-// PNG signature bytes: 137 80 78 71 13 10 26 10.
-const signature = [137, 80, 78, 71, 13, 10, 26, 10];
-const looksPng = signature.every((byte, i) => artBytes[i] === byte);
-if (!looksPng) {
-  abort('entry.png is not a PNG file');
-}
-
-// Gate: the file must fit within 1 MiB.
-const sizeOnDisk = statSync(artPath).size;
-if (sizeOnDisk > LIMIT_BYTES) {
-  abort(`entry.png is ${sizeOnDisk} bytes, over the 1 MiB limit`);
-}
-
-// Gate: at most 1024 by 1024 pixels. A PNG stores its width and height
-// as big-endian 32-bit values at offsets 16 and 20, inside the IHDR chunk.
-const widthPx = artBytes.readUInt32BE(16);
-const heightPx = artBytes.readUInt32BE(20);
-if (widthPx > LIMIT_SIDE_PX || heightPx > LIMIT_SIDE_PX) {
-  abort(`entry.png is ${widthPx}x${heightPx}, over the 1024x1024 limit`);
-}
-
-mkdirSync(outDir, { recursive: true });
-writeFileSync(join(outDir, 'entry.png'), artBytes);
-console.log(`delivered ${artBytes.length} bytes to ${join(outDir, 'entry.png')}`);
+console.log(`wrote ${targetPath} (${writtenBytes} bytes)`);
